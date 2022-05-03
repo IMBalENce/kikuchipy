@@ -19,8 +19,6 @@
 
 from kikuchipy.detectors.calibration import PCCalibrationMovingScreen
 from kikuchipy.detectors.ebsd_detector import EBSDDetector
+from kikuchipy.detectors.ecp_detector import ECPDetector
 
-__all__ = [
-    "PCCalibrationMovingScreen",
-    "EBSDDetector",
-]
+__all__ = ["PCCalibrationMovingScreen", "EBSDDetector", "ECPDetector"]
