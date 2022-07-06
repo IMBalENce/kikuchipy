@@ -91,6 +91,7 @@ def metadata_nodes(
     available_nodes = {
         "sem": "Acquisition_instrument.SEM",
         "ebsd": "Acquisition_instrument.SEM.Detector.EBSD",
+        "ecp": "Acquisition_instrument.SEM.Detector.ECP",
     }
 
     if nodes is None:

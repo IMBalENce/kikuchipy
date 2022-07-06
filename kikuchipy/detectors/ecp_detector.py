@@ -7,6 +7,7 @@
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
+
 # kikuchipy is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
@@ -40,12 +41,12 @@ class ECPDetector:
         shape: Tuple[int, int] = (1, 1),
         px_size: float = 1,
         binning: int = 1,
-        tilt: float = 0,
+        tilt: float = -90,
         azimuthal: float = 0,
         sample_tilt: float = 0,
         pc: Union[np.ndarray, list, tuple] = (0.5, 0.5, 3),
     ):
-        r"""Create an EBSD detector with a shape, pixel size, binning,
+        r"""Create an virtual ECP detector with a shape, pixel size, binning,
         and projection/pattern center(s) (PC(s)).
 
         Parameters
@@ -60,30 +61,32 @@ class ECPDetector:
             Detector binning, i.e. how many pixels are binned into one.
             Default is 1, i.e. no binning.
         tilt
-            Detector tilt from horizontal in degrees. Default is 0.
+            Detector tilt from horizontal in degrees. In default, the 
+            virtual detector is assumed to be below the e-beam pole 
+            piece and right above the sample. Default is -90.
         azimuthal
             Sample tilt about the sample RD (downwards) axis. A positive
             angle means the sample normal moves towards the right
             looking from the sample to the detector. Default is 0.
         sample_tilt
-            Sample tilt from horizontal in degrees. Default is 70.
+            Sample tilt from horizontal in degrees. Default is 0.
         pc
             X, Y and Z coordinates of the projection/pattern centers
             (PCs), describing the location of the beam on the sample
-            measured relative to the detection screen. See *Notes* for
-            the definition and conversions between conventions. If
-            multiple PCs are passed, they are assumed to be on the form
-            [[x0, y0, z0], [x1, y1, z1], ...]. Default is
+            measured relative to the detection screen. Because the detector
+            is assumed to be right above the sample, therefore, with X=0.5
+            and Y=0.5. Z changes the "magnification" or crop region of master
+            pattern. If multiple PCs are passed, they are assumed to be on 
+            the form [[x0, y0, z0], [x1, y1, z1], ...]. Default is
             [[0.5, 0.5, 0.5]].
-        convention
-            PC convention. If None (default), Bruker's convention is
-            assumed. Options are "tsl", "oxford", "bruker", "emsoft",
-            "emsoft4", and "emsoft5". "emsoft" and "emsoft5" is the same
-            convention. See *Notes*  for conversions between
-            conventions.
 
         Notes
         -----
+        
+        TODO: 
+        - clarify the definitions of pattern centre, perhaps in the Bruker convention
+        - need to accommodate rectangular pattern shape, aspect ratio !=1.
+        
         The pattern on the detector is always viewed *from* the detector
         *towards*  the sample. Pattern width and height is here given as
         $N_x$ and $N_y$ (possibly binned).

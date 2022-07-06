@@ -21,18 +21,24 @@ backscatter electron images.
 
 from kikuchipy.signals import util
 from kikuchipy.signals.ebsd import EBSD, LazyEBSD
+from kikuchipy.signals.ecp import ECP, LazyECP
 from kikuchipy.signals.ebsd_master_pattern import (
     EBSDMasterPattern,
     LazyEBSDMasterPattern,
 )
-from kikuchipy.signals.ecp_master_pattern import ECPMasterPattern, LazyECPMasterPattern
+from kikuchipy.signals.ecp_master_pattern import (
+    ECPMasterPattern,
+    LazyECPMasterPattern,
+)
 from kikuchipy.signals.virtual_bse_image import VirtualBSEImage
 
 __all__ = [
     "EBSD",
+    "ECP",
     "EBSDMasterPattern",
     "ECPMasterPattern",
     "LazyEBSD",
+    "LazyECP",
     "LazyEBSDMasterPattern",
     "LazyECPMasterPattern",
     "util",

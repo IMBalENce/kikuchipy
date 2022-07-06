@@ -16,11 +16,30 @@
 # You should have received a copy of the GNU General Public License
 # along with kikuchipy. If not, see <http://www.gnu.org/licenses/>.
 
+import gc
+import sys
+from typing import Union
+
+import dask.array as da
+from dask.diagnostics import ProgressBar
 from hyperspy._signals.signal2d import Signal2D
+import numpy as np
+from orix.crystal_map import CrystalMap, PhaseList
+from orix.quaternion import Rotation
+from skimage.util.dtype import dtype_range
+
 
 from kikuchipy.signals._kikuchi_master_pattern import (
     KikuchiMasterPattern,
     LazyKikuchiMasterPattern,
+)
+
+from kikuchipy.detectors.ecp_detector import ECPDetector
+from kikuchipy.signals import LazyECP, ECP
+from kikuchipy.signals.util._dask import get_chunking
+from kikuchipy.signals.util._master_pattern import (
+    _get_direction_cosines_for_single_pc_from_detector,
+    _project_patterns_from_master_pattern,
 )
 
 
@@ -36,6 +55,183 @@ class ECPMasterPattern(KikuchiMasterPattern, Signal2D):
 
     _signal_type = "ECPMasterPattern"
     _alias_signal_types = ["ecp_master_pattern"]
+
+    # ---------------------- Custom properties ----------------------- #
+
+    def get_patterns(
+        self,
+        rotations: Rotation,
+        detector: ECPDetector,
+        energy: Union[int, float],
+        dtype_out: Union[type, np.dtype] = np.float32,
+        compute: bool = False,
+        **kwargs,
+    ) -> Union[ECP, LazyECP]:
+        """Return a dictionary of ECP patterns projected onto a
+        detector from a master pattern in the square Lambert
+        projection :cite:`callahan2013dynamical`, for a set of crystal
+        rotations relative to the EDAX TSL sample reference frame (RD,
+        TD, ND) and a fixed detector-sample geometry.
+
+        Parameters
+        ----------
+        rotations
+            Crystal rotations to get patterns from. The shape of this
+            instance, a maximum of two dimensions, determines the
+            navigation shape of the output signal.
+        detector
+            ECP detector describing the detector dimensions and the
+            detector-sample geometry with a single, fixed
+            projection/pattern center.
+        energy
+            Acceleration voltage, in kV, used to simulate the desired
+            master pattern to create a dictionary from. If only a single
+            energy is present in the signal, this will be returned no
+            matter its energy.
+        dtype_out
+            Data type of the returned patterns, by default np.float32.
+        compute
+            Whether to return a lazy result, by default False. For more
+            information see :func:`~dask.array.Array.compute`.
+        kwargs
+            Keyword arguments passed to
+            :func:`~kikuchipy.signals.util.get_chunking` to control the
+            number of chunks the dictionary creation and the output data
+            array is split into. Only `chunk_shape`, `chunk_bytes` and
+            `dtype_out` (to `dtype`) are passed on.
+
+        Returns
+        -------
+        ECP or LazyECP
+            Signal with navigation and signal shape equal to the
+            rotation instance and detector shape, respectively.
+
+        Notes
+        -----
+        If the master pattern phase has a non-centrosymmetric point
+        group, both the northern and southern hemispheres must be
+        provided. For more details regarding the reference frame visit
+        the reference frame user guide.
+        """
+        self._is_suitable_for_projection(raise_if_not=True)
+
+        if len(detector.pc) > 1:
+            raise NotImplementedError(
+                "Detector must have exactly one projection center"
+            )
+
+        # Get suitable chunks when iterating over the rotations. Signal
+        # axes are not chunked.
+        nav_shape = rotations.shape
+        nav_dim = len(nav_shape)
+        if nav_dim > 2:
+            raise ValueError(
+                "`rotations` can only have one or two dimensions, but an instance with "
+                f"{nav_dim} dimensions was passed"
+            )
+        data_shape = nav_shape + detector.shape
+        chunks = get_chunking(
+            data_shape=data_shape,
+            nav_dim=nav_dim,
+            sig_dim=len(detector.shape),
+            chunk_shape=kwargs.pop("chunk_shape", None),
+            chunk_bytes=kwargs.pop("chunk_bytes", None),
+            dtype=dtype_out,
+        )
+
+        # Whether to rescale pattern intensities after projection
+        if dtype_out != self.data.dtype:
+            rescale = True
+            if isinstance(dtype_out, np.dtype):
+                dtype_out = dtype_out.type
+            out_min, out_max = dtype_range[dtype_out]
+        else:
+            rescale = False
+            # Cannot be None due to Numba, so they are set to something
+            # here. Values aren't used unless `rescale` is True.
+            out_min, out_max = 1, 2
+
+        # Get direction cosines for each detector pixel relative to the
+        # source point
+        direction_cosines = _get_direction_cosines_for_single_pc_from_detector(detector)
+
+        # Get dask array from rotations
+        rot_da = da.from_array(rotations.data, chunks=chunks[:nav_dim] + (-1,))
+
+        # Which axes to drop and add when iterating over the rotations
+        # dask array to produce the EBSD signal array, i.e. drop the
+        # (4,)-shape quaternion axis and add detector shape axes, e.g.
+        # (60, 60)
+        if nav_dim == 1:
+            drop_axis = 1
+            new_axis = (1, 2)
+        else:  # nav_dim == 2
+            drop_axis = 2
+            new_axis = (2, 3)
+
+        master_north, master_south = self._get_master_pattern_arrays_from_energy(energy)
+
+        # Project simulated patterns onto detector
+        npx, npy = self.axes_manager.signal_shape
+        scale = (npx - 1) / 2
+        # TODO: Use dask.delayed instead?
+        simulated = rot_da.map_blocks(
+            _project_patterns_from_master_pattern,
+            direction_cosines=direction_cosines,
+            master_north=master_north,
+            master_south=master_south,
+            npx=int(npx),
+            npy=int(npy),
+            scale=float(scale),
+            dtype_out=dtype_out,
+            rescale=rescale,
+            out_min=out_min,
+            out_max=out_max,
+            drop_axis=drop_axis,
+            new_axis=new_axis,
+            chunks=chunks,
+            dtype=dtype_out,
+        )
+
+        # Add crystal map and detector to keyword arguments
+        kwargs = dict(
+            xmap=CrystalMap(phase_list=PhaseList(self.phase), rotations=rotations),
+            detector=detector,
+        )
+
+        # Specify navigation and signal axes for signal initialization
+        names = ["y", "x", "dy", "dx"]
+        scales = np.ones(4)
+        ndim = simulated.ndim
+        if ndim == 3:
+            names = names[1:]
+            scales = scales[1:]
+        axes = [
+            dict(
+                size=data_shape[i],
+                index_in_array=i,
+                name=names[i],
+                scale=scales[i],
+                offset=0.0,
+                units="px",
+            )
+            for i in range(ndim)
+        ]
+
+        if compute:
+            patterns = np.zeros(shape=simulated.shape, dtype=simulated.dtype)
+            with ProgressBar():
+                print(
+                    f"Creating a dictionary of {nav_shape} simulated patterns:",
+                    file=sys.stdout,
+                )
+                simulated.store(patterns, compute=True)
+            out = ECP(patterns, axes=axes, **kwargs)
+        else:
+            out = LazyECP(simulated, axes=axes, **kwargs)
+        gc.collect()
+
+        return out
 
 
 class LazyECPMasterPattern(LazyKikuchiMasterPattern, ECPMasterPattern):
